@@ -1,0 +1,31 @@
+services:
+  anchor-relay:
+    build:
+      context: ../services/relay
+    container_name: anchor-relay
+    restart: unless-stopped
+    environment:
+      ANCHOR_RELAY_DB: /data/relay.sqlite3
+      ANCHOR_ALLOWED_ORIGINS: ${ANCHOR_ALLOWED_ORIGINS:-https://anchor.example.com}
+      ANCHOR_MAX_CIPHERTEXT_BYTES: ${ANCHOR_MAX_CIPHERTEXT_BYTES:-1048576}
+      ANCHOR_MAX_VAULT_BYTES: ${ANCHOR_MAX_VAULT_BYTES:-52428800}
+      ANCHOR_ADMIN_TOKEN: ${ANCHOR_ADMIN_TOKEN:-}
+    volumes:
+      - anchor-relay-data:/data
+    ports:
+      - "127.0.0.1:8080:8080"
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m,noexec,nosuid
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8080/readyz', timeout=2).read()"]
+      interval: 20s
+      timeout: 4s
+      retries: 3
+      start_period: 10s
+volumes:
+  anchor-relay-data:

@@ -1,0 +1,12 @@
+{
+  "name": "Anchor — Private Memory",
+  "short_name": "Anchor",
+  "description": "A local-first memory and action layer.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f5f5f0",
+  "theme_color": "#f5f5f0",
+  "icons": [
+    { "src": "/anchor-mark.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+  ]
+}

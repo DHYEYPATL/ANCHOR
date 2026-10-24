@@ -1,0 +1,27 @@
+# JavaScript
+node_modules/
+dist/
+coverage/
+.vite/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+
+# Local app/relay data
+services/relay/data/
+*.sqlite3
+*.db
+.env
+.env.*
+!.env.example
+
+# Build outputs
+*.apk
+*.aab
+*.dmg
+*.msi
+*.exe
