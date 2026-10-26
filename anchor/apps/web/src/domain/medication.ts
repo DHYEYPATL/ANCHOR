@@ -20,6 +20,9 @@ export function recordMedicationDose(
   status: 'taken' | 'skipped',
   timestamp = new Date().toISOString(),
 ): AnchorItem {
+  if (item.safetyBlocked) {
+    throw new Error('Cannot log dose for a medication with unresolved safety or dosage conflicts.');
+  }
   const existingLogs = item.doseLogs ?? [];
   const updatedLogs = [...existingLogs, { timestamp, status }];
 

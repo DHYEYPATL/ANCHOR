@@ -34,6 +34,8 @@ export interface AnchorItem {
   recurrence?: 'daily' | 'weekly' | 'monthly' | 'yearly';
   doseLogs?: { timestamp: string; status: 'taken' | 'skipped' }[];
   attachments?: AttachmentMetadata[];
+  safetyBlocked?: boolean;
+  unresolvedReason?: string;
 }
 
 export interface EncryptedBlob {

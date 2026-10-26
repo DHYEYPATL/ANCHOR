@@ -36,7 +36,7 @@ export function getMissedReminders(items: AnchorItem[]): AnchorItem[] {
   const notified = getStoredNotifiedIds();
 
   return items.filter((item) => {
-    if (item.status === 'done' || item.deletedAt || !item.dueAt) return false;
+    if (item.status === 'done' || item.deletedAt || !item.dueAt || item.safetyBlocked) return false;
     const dueTime = new Date(item.dueAt).getTime();
     if (Number.isNaN(dueTime)) return false;
     // Item is overdue and hasn't been acknowledged/notified
@@ -76,7 +76,7 @@ export interface DueReminderStage {
  * should fire for this item right now.
  */
 export function getDueReminderStages(item: AnchorItem, now = Date.now()): DueReminderStage[] {
-  if (item.status === 'done' || item.deletedAt || !item.dueAt) return [];
+  if (item.status === 'done' || item.deletedAt || !item.dueAt || item.safetyBlocked) return [];
   const dueTime = new Date(item.dueAt).getTime();
   if (Number.isNaN(dueTime)) return [];
 

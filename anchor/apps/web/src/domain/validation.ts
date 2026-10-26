@@ -10,7 +10,7 @@ const KINDS = new Set<ItemKind>(['task', 'event', 'promise', 'note', 'consumable
 const STATUSES = new Set<ItemStatus>(['open', 'done', 'archived']);
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const DEVICE_ID = /^device-[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const ITEM_KEYS = new Set(['id','kind','title','body','status','createdAt','updatedAt','dueAt','category','sourceText','sourceLabel','confidence','quantity','unit','dailyRate','reorderThreshold','recurrence','doseLogs','versionVector','deletedAt','reminderMinutesBefore','attachments']);
+const ITEM_KEYS = new Set(['id','kind','title','body','status','createdAt','updatedAt','dueAt','category','sourceText','sourceLabel','confidence','quantity','unit','dailyRate','reorderThreshold','recurrence','doseLogs','versionVector','deletedAt','reminderMinutesBefore','attachments','safetyBlocked','unresolvedReason']);
 const RESERVED_KEYS = new Set(['__proto__', 'prototype', 'constructor']);
 
 function isObject(value: unknown): value is Record<string, unknown> {
@@ -62,6 +62,12 @@ export function assertValidAnchorItem(value: unknown): asserts value is AnchorIt
   if (value.reorderThreshold !== undefined && value.reorderThreshold !== null && (!Number.isSafeInteger(value.reorderThreshold) || Number(value.reorderThreshold) < 0)) fail('invalid reorder threshold.');
   if (value.recurrence !== undefined && value.recurrence !== null && !['daily', 'weekly', 'monthly', 'yearly'].includes(String(value.recurrence))) fail('invalid recurrence.');
   if (value.doseLogs !== undefined && value.doseLogs !== null && !Array.isArray(value.doseLogs)) fail('invalid dose logs.');
+  if (value.safetyBlocked !== undefined && value.safetyBlocked !== null && typeof value.safetyBlocked !== 'boolean') fail('invalid safetyBlocked flag.');
+  if (value.unresolvedReason !== undefined && value.unresolvedReason !== null && !isBoundedString(value.unresolvedReason, 500)) fail('invalid unresolvedReason.');
+  if (value.safetyBlocked) {
+    if (value.dueAt) fail('cannot schedule a due date on an item that is safety blocked / unresolved.');
+    if (value.kind === 'consumable' && (value.dailyRate || value.quantity)) fail('cannot activate dosage or inventory schedule on a safety blocked item.');
+  }
   assertValidVersionVector(value.versionVector);
   if (value.attachments !== undefined) {
     if (!Array.isArray(value.attachments) || value.attachments.length > MAX_ATTACHMENTS_PER_RECORD) fail('invalid attachment list.');

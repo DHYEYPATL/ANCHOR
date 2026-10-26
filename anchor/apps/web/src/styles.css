@@ -212,3 +212,32 @@ kbd { background: #fffefa; border: 1px solid #dfe3da; color: #929a8e; border-rad
 .mirror-section ul { margin: 0; padding-left: 18px; font-size: 12px; color: #556254; line-height: 1.5; }
 .mirror-alerts ul { color: #9c5c2d; }
 
+/* Capture & Duplicate Warnings */
+.capture-warning-banner, .duplicate-warning-banner { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-radius: 8px; font-size: 11px; line-height: 1.5; margin-bottom: 12px; }
+.capture-warning-banner { background: #fdf5e6; border: 1px solid #f2dbb3; color: #8c5c16; }
+.duplicate-warning-banner { background: #fff8e8; border: 1px solid #ebd49d; color: #79571b; }
+.duplicate-warning-banner strong { display: block; font-size: 11px; color: #5d3f0a; margin-bottom: 2px; }
+.duplicate-warning-banner p { margin: 0; }
+.duplicate-actions { display: flex; gap: 8px; margin-top: 6px; flex-wrap: wrap; }
+
+/* Ambiguity Resolution Box */
+.ambiguity-resolution-box { background: #faf8f5; border: 1px solid #e8decb; border-radius: 8px; padding: 12px 14px; margin-bottom: 12px; }
+.ambiguity-resolution-box h4 { margin: 0 0 8px; font-size: 12px; font-weight: 600; color: #8c5c16; }
+.ambiguity-group { margin-bottom: 10px; }
+.ambiguity-group:last-child { margin-bottom: 0; }
+.ambiguity-group label { display: block; font-size: 11px; font-weight: 500; color: #435241; margin-bottom: 6px; }
+.resolution-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+.chip-button { background: #fff; border: 1px solid #d1c7b7; border-radius: 16px; padding: 5px 12px; font-size: 11px; cursor: pointer; color: #2e382d; transition: all 0.15s ease; }
+.chip-button:hover { background: #f2eee8; border-color: #b0a490; }
+.chip-button.chip-active { background: #2f4f38; border-color: #2f4f38; color: #fff; font-weight: 600; }
+.safety-hint { color: #a04000; font-size: 11px; margin-top: 6px; }
+.deadline-change-notice { display: inline-block; font-weight: 600; color: #2f4f38; }
+
+/* Cancellation & Secret Masking */
+.cancellation-action-card { display: flex; align-items: flex-start; gap: 10px; padding: 10px 14px; border-radius: 8px; font-size: 11px; line-height: 1.5; margin-bottom: 12px; background: #fff1f0; border: 1px solid #ffccc7; color: #a8071a; }
+.cancellation-action-card strong { display: block; font-size: 11px; color: #820014; margin-bottom: 2px; }
+.cancellation-action-card p { margin: 0; }
+.cancellation-actions { display: flex; gap: 8px; margin-top: 8px; flex-wrap: wrap; }
+.confidential-pill { display: inline-flex; align-items: center; background: #f0f5ff; border: 1px solid #adc6ff; color: #1d39c4; font-size: 10px; font-weight: 600; padding: 1px 6px; border-radius: 4px; margin-left: 6px; }
+.reveal-secret-btn { background: none; border: 1px solid #d9d9d9; border-radius: 12px; padding: 1px 8px; font-size: 10px; cursor: pointer; color: #595959; transition: all 0.15s; margin-left: 6px; }
+.reveal-secret-btn:hover { background: #f5f5f5; border-color: #8c8c8c; color: #262626; }

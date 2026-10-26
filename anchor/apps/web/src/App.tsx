@@ -86,6 +86,8 @@ export default function App() {
   const [captureText, setCaptureText] = useState('');
   const [draft, setDraft] = useState<Partial<AnchorItem> & Pick<AnchorItem, 'title' | 'kind'>>({ title: '', kind: 'task' });
   const [capturePreview, setCapturePreview] = useState<ReturnType<typeof extractDraft> | null>(null);
+  const [selectedDateIso, setSelectedDateIso] = useState<string | null>(null);
+  const [selectedTimeOption, setSelectedTimeOption] = useState<{ hour: number; minute: number } | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [useLocalGemma, setUseLocalGemma] = useState(() => { try { return localStorage.getItem('anchor-local-gemma-enabled') === 'true'; } catch { return false; } });
   const [gemmaEndpoint, setGemmaEndpoint] = useState(() => { try { return localStorage.getItem('anchor-local-gemma-endpoint') || 'http://localhost:11434'; } catch { return 'http://localhost:11434'; } });
@@ -287,12 +289,14 @@ export default function App() {
   const closeModal = () => {
     stopAndDiscardRecording();
     setModal(null); setEditing(null); setCaptureText(''); setCapturePreview(null); setPendingFiles([]); setMultiDrafts([]);
+    setSelectedDateIso(null); setSelectedTimeOption(null);
     setDraft({ title: '', kind: 'task' });
   };
 
   const beginCapture = () => {
     stopAndDiscardRecording();
     setEditing(null); setCaptureText(''); setCapturePreview(null); setPendingFiles([]); setMultiDrafts([]);
+    setSelectedDateIso(null); setSelectedTimeOption(null);
     setDraft({ title: '', kind: 'task' }); setModal('capture');
     setTimeout(() => captureInputRef.current?.focus(), 50);
   };
@@ -488,6 +492,8 @@ export default function App() {
         result = await new LocalGemmaOllamaAdapter(gemmaEndpoint, gemmaModel).extract({ text: captureText, imageDataUrl });
       }
       setCapturePreview(result);
+      setSelectedDateIso(null);
+      setSelectedTimeOption(null);
       setDraft({ ...toItemDraft(result), dueAt: result.dueAt });
       setLocalExtractionsCount((c) => {
         const next = c + 1;
@@ -510,7 +516,7 @@ export default function App() {
       }
       await refresh(unlocked);
       closeModal();
-      setMessage({ type: 'success', text: `Extracted and saved ${count} records from the circular / timetable.` });
+      setMessage({ type: 'success', text: `Extracted and saved ${count} records.` });
       if (autoSyncEnabled && relayUrl) void runSync();
     } catch (e) {
       setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Could not save multiple records.' });
@@ -519,13 +525,163 @@ export default function App() {
     }
   };
 
+  const applyResolvedDateTime = (dateIso?: string | null, timeOpt?: { hour: number; minute: number } | null) => {
+    const dIso = dateIso !== undefined ? dateIso : selectedDateIso;
+    const tOpt = timeOpt !== undefined ? timeOpt : selectedTimeOption;
+
+    const hasAmbiguousDate = Boolean(capturePreview?.ambiguity?.isAmbiguousDate);
+    const hasAmbiguousTime = Boolean(capturePreview?.ambiguity?.isAmbiguousTime);
+
+    if (hasAmbiguousDate && !dIso) return;
+    if (hasAmbiguousTime && !tOpt) return;
+
+    const baseDate = dIso ? new Date(dIso) : new Date();
+    if (tOpt) {
+      baseDate.setHours(tOpt.hour, tOpt.minute, 0, 0);
+    } else {
+      baseDate.setHours(9, 0, 0, 0);
+    }
+
+    setDraft((prev) => ({
+      ...prev,
+      dueAt: baseDate.toISOString(),
+      safetyBlocked: false,
+      unresolvedReason: undefined,
+    }));
+  };
+
+  const applyResolvedDosage = (option: { label: string; dailyRate: number }) => {
+    setDraft((prev) => ({
+      ...prev,
+      dailyRate: option.dailyRate,
+      safetyBlocked: false,
+      unresolvedReason: undefined,
+      confidence: 'medium',
+      body: `${prev.body ?? ''}\n\n[Verified Regimen]: ${option.label}`,
+    }));
+  };
+
+  const duplicateItem = useMemo(() => {
+    if (!capturePreview || multiDrafts.length > 0) return null;
+    const targetTitle = (draft.title || '').trim().toLowerCase();
+    if (!targetTitle) return null;
+    const targetNorm = targetTitle.replace(/^(?:remind me to|please|todo:)\s+/i, '').replace(/[^a-z0-9]/g, '');
+    if (!targetNorm || targetNorm.length < 3) return null;
+    return items.find((item) => {
+      if (item.status === 'done' || item.deletedAt) return false;
+      const itemNorm = item.title.trim().toLowerCase().replace(/^(?:remind me to|please|todo:)\s+/i, '').replace(/[^a-z0-9]/g, '');
+      if (!itemNorm) return false;
+      const isTitleSimilar = itemNorm === targetNorm ||
+        (itemNorm.length >= 6 && targetNorm.length >= 6 && (itemNorm.includes(targetNorm) || targetNorm.includes(itemNorm)));
+      return isTitleSimilar;
+    });
+  }, [items, draft.title, capturePreview, multiDrafts]);
+
+  const updateExistingDuplicate = async (existing: AnchorItem) => {
+    if (!unlocked) return;
+    setBusy(true); setMessage(null);
+    try {
+      acknowledgeReminder(existing);
+      const updated: AnchorItem = {
+        ...existing,
+        dueAt: draft.dueAt ?? existing.dueAt,
+        body: draft.body ? `${existing.body}\n\n[Updated deadline]: ${draft.dueAt ? formatDue(draft.dueAt) : 'unscheduled'}` : existing.body,
+        updatedAt: new Date().toISOString(),
+      };
+      await saveItem(unlocked.db, unlocked.session, updated);
+      await refresh(unlocked);
+      closeModal();
+      setMessage({ type: 'success', text: `Updated deadline of “${existing.title}” to ${updated.dueAt ? formatDue(updated.dueAt) : 'unscheduled'}.` });
+      if (autoSyncEnabled && relayUrl) void runSync();
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Could not update existing item.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const cancellationMatch = useMemo(() => {
+    if (!capturePreview?.isCancelled || multiDrafts.length > 0) return null;
+    const targetNorm = (draft.title || '').trim().toLowerCase()
+      .replace(/\s*\(already completed\)|\s*\(no longer needed\)|\s*\(cancelled\)/ig, '')
+      .replace(/^(?:remind me to|please|todo:)\s+/i, '')
+      .replace(/[^a-z0-9]/g, '');
+    if (!targetNorm || targetNorm.length < 3) return null;
+    return items.find((item) => {
+      if (item.status === 'done' || item.deletedAt) return false;
+      const itemNorm = item.title.trim().toLowerCase().replace(/^(?:remind me to|please|todo:)\s+/i, '').replace(/[^a-z0-9]/g, '');
+      if (!itemNorm) return false;
+      return itemNorm === targetNorm || itemNorm.includes(targetNorm) || targetNorm.includes(itemNorm);
+    });
+  }, [items, draft.title, capturePreview, multiDrafts]);
+
+  const deleteMatchedItem = async (target: AnchorItem) => {
+    if (!unlocked) return;
+    setBusy(true); setMessage(null);
+    try {
+      await deleteItem(unlocked.db, unlocked.session, target.id);
+      acknowledgeReminder(target);
+      await refresh(unlocked);
+      closeModal();
+      setMessage({ type: 'success', text: `Deleted active task “${target.title}”.` });
+      if (autoSyncEnabled && relayUrl) void runSync();
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Could not delete item.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const completeMatchedItem = async (target: AnchorItem) => {
+    if (!unlocked) return;
+    setBusy(true); setMessage(null);
+    try {
+      acknowledgeReminder(target);
+      await saveItem(unlocked.db, unlocked.session, {
+        ...target,
+        status: 'done',
+        body: `${target.body}\n\n[Marked completed]: ${draft.body || 'No longer needed'}`,
+        updatedAt: new Date().toISOString(),
+      });
+      await refresh(unlocked);
+      closeModal();
+      setMessage({ type: 'success', text: `Marked “${target.title}” as completed.` });
+      if (autoSyncEnabled && relayUrl) void runSync();
+    } catch (e) {
+      setMessage({ type: 'error', text: e instanceof Error ? e.message : 'Could not complete item.' });
+    } finally {
+      setBusy(false);
+    }
+  };
+
   const commitDraft = async (event: FormEvent) => {
     event.preventDefault();
     if (!unlocked) return;
+    if (draft.safetyBlocked) {
+      setMessage({ type: 'error', text: draft.unresolvedReason || 'Please resolve the ambiguity or conflict before saving.' });
+      return;
+    }
     setBusy(true); setMessage(null);
     const createdAttachments: AttachmentMetadata[] = [];
     let recordCommitted = false;
     try {
+      // Check if this draft is a self-cancellation of an existing open reminder
+      if (draft.status === 'done' || capturePreview?.isCancelled) {
+        const targetNorm = (draft.title || '').toLowerCase().replace(/\s*\(already completed\)/i, '').replace(/[^a-z0-9]/g, '');
+        if (targetNorm.length >= 3) {
+          const existingOpen = items.find((i) => i.status === 'open' && !i.deletedAt && i.title.toLowerCase().replace(/[^a-z0-9]/g, '').includes(targetNorm));
+          if (existingOpen) {
+            acknowledgeReminder(existingOpen);
+            await saveItem(unlocked.db, unlocked.session, {
+              ...existingOpen,
+              status: 'done',
+              body: `${existingOpen.body}\n\n[Marked completed]: ${draft.body || 'Self-cancellation'}`,
+              updatedAt: new Date().toISOString(),
+            });
+          }
+        }
+      }
+
       const itemId = draft.id ?? editing?.id ?? crypto.randomUUID();
       let attachments: AttachmentMetadata[] = [...(draft.attachments ?? [])];
       for (const file of pendingFiles) {
@@ -536,7 +692,7 @@ export default function App() {
       const saved = await saveItem(unlocked.db, unlocked.session, { ...draft, id: itemId, attachments });
       recordCommitted = true;
       await refresh(unlocked);
-      setModal(null); setEditing(null); setCaptureText(''); setCapturePreview(null); setPendingFiles([]); setMultiDrafts([]); setDraft({ title: '', kind: 'task' });
+      closeModal();
       setMessage({ type: 'success', text: `Saved “${saved.title}”${createdAttachments.length > 0 ? ` with ${createdAttachments.length} encrypted attachment(s)` : ''} to this vault.` });
       setView(saved.kind === 'promise' ? 'promises' : saved.kind === 'consumable' ? 'inventory' : 'today');
       if (autoSyncEnabled && relayUrl) void runSync();
@@ -1144,8 +1300,8 @@ export default function App() {
         {!capturePreview ? <div className="modal-actions"><button className="button button-secondary" onClick={closeModal}>Cancel</button><button className="button button-primary" onClick={() => void previewCapture()} disabled={!captureText.trim() || extracting}>{extracting ? 'Extracting locally…' : 'Review extraction'} <span>→</span></button></div> : multiDrafts.length > 1 ? (
           <div className="multi-draft-box">
             <div className="multi-draft-header">
-              <span className="eyebrow">CIRCULAR / TIMETABLE DETECTED</span>
-              <h3>Anchor extracted {multiDrafts.length} events from this text:</h3>
+              <span className="eyebrow">MULTIPLE ITEMS DETECTED</span>
+              <h3>Anchor extracted {multiDrafts.length} records from this text:</h3>
             </div>
             <ul className="multi-draft-list">
               {multiDrafts.map((d, i) => (
@@ -1158,7 +1314,7 @@ export default function App() {
                 </li>
               ))}
             </ul>
-            <p className="form-hint">Anchor extracted each circular/schedule entry as an independent event. You can save them all with one click or review as a single entry.</p>
+            <p className="form-hint">Anchor extracted each entry as an independent record. You can save them all with one click or review as a single entry.</p>
             <div className="modal-actions">
               <button className="button button-secondary" type="button" onClick={() => setMultiDrafts([])}>Review as single item</button>
               <button className="button button-primary" type="button" onClick={() => void commitMultipleDrafts()} disabled={busy}>
@@ -1168,11 +1324,112 @@ export default function App() {
           </div>
         ) : <form onSubmit={(e) => void commitDraft(e)} className="review-extraction">
           <div className="review-title-row"><span className="eyebrow">SUGGESTED RECORD</span><span className={`confidence confidence-${capturePreview.confidence}`}>{capturePreview.confidence} confidence</span></div>
+          {capturePreview.warning && <div className="capture-warning-banner"><span>⚠️</span><p>{capturePreview.warning}</p></div>}
+          {capturePreview.ambiguity && (
+            <div className="ambiguity-resolution-box">
+              <h4>⚠️ Clarification required</h4>
+              {capturePreview.ambiguity.isAmbiguousDate && capturePreview.ambiguity.dateOptions && (
+                <div className="ambiguity-group">
+                  <label>Ambiguous date format (04/05). Which date did you mean?</label>
+                  <div className="resolution-chips">
+                    {capturePreview.ambiguity.dateOptions.map((opt) => (
+                      <button
+                        key={opt.iso}
+                        type="button"
+                        className={`chip-button ${selectedDateIso === opt.iso ? 'chip-active' : ''}`}
+                        onClick={() => {
+                          setSelectedDateIso(opt.iso);
+                          applyResolvedDateTime(opt.iso, selectedTimeOption);
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {capturePreview.ambiguity.isAmbiguousTime && capturePreview.ambiguity.timeOptions && (
+                <div className="ambiguity-group">
+                  <label>Ambiguous time ("at 9"). Which time did you mean?</label>
+                  <div className="resolution-chips">
+                    {capturePreview.ambiguity.timeOptions.map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        className={`chip-button ${(selectedTimeOption?.hour === opt.hour && selectedTimeOption?.minute === opt.minute) ? 'chip-active' : ''}`}
+                        onClick={() => {
+                          setSelectedTimeOption(opt);
+                          applyResolvedDateTime(selectedDateIso, opt);
+                        }}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {capturePreview.ambiguity.isDosageConflict && capturePreview.ambiguity.dosageOptions && (
+                <div className="ambiguity-group">
+                  <label>Dosage conflict detected. Which instruction is verified?</label>
+                  <div className="resolution-chips">
+                    {capturePreview.ambiguity.dosageOptions.map((opt) => (
+                      <button
+                        key={opt.label}
+                        type="button"
+                        className={`chip-button ${draft.dailyRate === opt.dailyRate && !draft.safetyBlocked ? 'chip-active' : ''}`}
+                        onClick={() => applyResolvedDosage(opt)}
+                      >
+                        {opt.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {draft.safetyBlocked && (
+                <p className="form-hint safety-hint">
+                  Schedule and reminders are paused until ambiguity is resolved above.
+                </p>
+              )}
+            </div>
+          )}
+          {cancellationMatch && (
+            <div className="cancellation-action-card">
+              <span>🗑️</span>
+              <div>
+                <strong>Active task match: “{cancellationMatch.title}”</strong>
+                <p>This capture indicates you no longer need this task. What would you like to do?</p>
+                <div className="cancellation-actions">
+                  <button type="button" className="button button-small button-danger" onClick={() => void deleteMatchedItem(cancellationMatch)} disabled={busy}>Delete task</button>
+                  <button type="button" className="button button-small button-primary" onClick={() => void completeMatchedItem(cancellationMatch)} disabled={busy}>Mark completed</button>
+                  <button type="button" className="button button-small button-secondary" onClick={closeModal} disabled={busy}>Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
+          {duplicateItem && (
+            <div className="duplicate-warning-banner">
+              <span>⚠️</span>
+              <div>
+                <strong>Potential duplicate detected</strong>
+                <p>
+                  You already have open item “{duplicateItem.title}”{duplicateItem.dueAt ? ` due ${formatDue(duplicateItem.dueAt)}` : ''}.
+                  {draft.dueAt && duplicateItem.dueAt && new Date(draft.dueAt).toDateString() !== new Date(duplicateItem.dueAt).toDateString() && (
+                    <span className="deadline-change-notice"> New input suggests changed deadline: {formatDue(draft.dueAt)}.</span>
+                  )}
+                </p>
+                <div className="duplicate-actions">
+                  <button type="button" className="button button-small button-primary" onClick={() => void updateExistingDuplicate(duplicateItem)} disabled={busy}>1. Update existing record</button>
+                  <button type="submit" className="button button-small button-secondary" disabled={busy || !draft.title.trim() || draft.safetyBlocked}>2. Keep both records</button>
+                  <button type="button" className="button button-small button-secondary" onClick={closeModal} disabled={busy}>3. Cancel</button>
+                </div>
+              </div>
+            </div>
+          )}
           <label htmlFor="captureTitle">Title</label><input id="captureTitle" value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} required maxLength={200}/>
-          <div className="field-row"><div><label htmlFor="captureKind">Type</label><select id="captureKind" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as ItemKind })}>{Object.entries(kindLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div><div><label htmlFor="captureDue">Date <span className="optional">Optional</span></label><input id="captureDue" type="datetime-local" value={draft.dueAt ? new Date(new Date(draft.dueAt).getTime() - new Date(draft.dueAt).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''} onChange={(e) => setDraft({ ...draft, dueAt: e.target.value ? new Date(e.target.value).toISOString() : undefined })}/></div></div>
+          <div className="field-row"><div><label htmlFor="captureKind">Type</label><select id="captureKind" value={draft.kind} onChange={(e) => setDraft({ ...draft, kind: e.target.value as ItemKind })}>{Object.entries(kindLabels).map(([key, label]) => <option key={key} value={key}>{label}</option>)}</select></div><div><label htmlFor="captureDue">Date <span className="optional">Optional</span></label><input id="captureDue" type="datetime-local" value={draft.dueAt ? new Date(new Date(draft.dueAt).getTime() - new Date(draft.dueAt).getTimezoneOffset() * 60000).toISOString().slice(0, 16) : ''} onChange={(e) => setDraft({ ...draft, dueAt: e.target.value ? new Date(e.target.value).toISOString() : undefined, safetyBlocked: false, unresolvedReason: undefined })}/></div></div>
           <label htmlFor="captureBody">Original source</label><textarea id="captureBody" value={draft.body ?? ''} onChange={(e) => setDraft({ ...draft, body: e.target.value })} rows={3}/>
           <p className="form-hint">Date extraction is heuristic. Confirm the year, time and time zone when they matter. The source text remains visible for verification; never accept a consequential date without checking it.</p>
-          <div className="modal-actions"><button className="button button-secondary" type="button" onClick={() => { setCapturePreview(null); }}>Back</button><button className="button button-primary" type="submit" disabled={busy || !draft.title.trim()}>{busy ? 'Saving…' : 'Save to memory'}</button></div>
+          <div className="modal-actions"><button className="button button-secondary" type="button" onClick={() => { setCapturePreview(null); }}>Back</button><button className="button button-primary" type="submit" disabled={busy || !draft.title.trim() || draft.safetyBlocked}>{busy ? 'Saving…' : draft.safetyBlocked ? 'Resolve ambiguity to save' : 'Save to memory'}</button></div>
         </form>}
       </>}
       {modal === 'edit' && <form onSubmit={(e) => void commitDraft(e)} className="edit-form">
@@ -1290,6 +1547,7 @@ export default function App() {
 }
 
 function ItemRow({ item, onToggle, onEdit, onDownloadAttachment, onRecordDose }: { item: AnchorItem; onToggle: () => void; onEdit: () => void; onDownloadAttachment: (attachment: AttachmentMetadata) => void; onRecordDose?: (item: AnchorItem, status: 'taken' | 'skipped') => void }) {
+  const [revealed, setRevealed] = useState(false);
   const overdue = item.status !== 'done' && isOverdue(item.dueAt);
   const today = item.status !== 'done' && isDueToday(item.dueAt);
   const depletion = item.kind === 'consumable' && item.quantity !== undefined && (item.dailyRate ?? 0) > 0
@@ -1297,15 +1555,35 @@ function ItemRow({ item, onToggle, onEdit, onDownloadAttachment, onRecordDose }:
     : null;
   const isMedicationOrDaily = item.kind === 'consumable' && (item.dailyRate ?? 0) > 0;
   const guide = getSubscriptionCancellationGuide(item);
+  const isSecret = /\b(?:password|passcode|pin\b|locker\s+code|door\s+code|gate\s+code|secret\b|credential|api[_-]?key|access\s+code|vault\s+code)\b/i.test(item.title + ' ' + (item.body ?? '')) || item.category?.toLowerCase() === 'confidential';
+  const maskSecret = (str?: string) => {
+    if (!str) return '';
+    if (revealed || !isSecret) return str;
+    return str.replace(/\b((?:is|code|pin|password|passcode|key)\s*(?:is|:)?\s*)([a-zA-Z0-9!@#$%^&*_-]{2,})/gi, '$1••••');
+  };
   return <article className={`item-row ${item.status === 'done' ? 'item-done' : ''}`}>
     <button className={`item-check ${item.status === 'done' ? 'checked' : ''}`} onClick={onToggle} aria-label={item.status === 'done' ? `Reopen ${item.title}` : `Mark ${item.title} done`}>{item.status === 'done' ? '✓' : ''}</button>
     <button className="item-main" onClick={onEdit} aria-label={`Edit ${item.title}`}>
       <div className="item-title-row">
-        <strong>{item.title}</strong>
+        <strong>{maskSecret(item.title)}</strong>
+        {isSecret && <span className="confidential-pill" title="Protected confidential secret">🔒 Confidential</span>}
+        {isSecret && (
+          <button
+            type="button"
+            className="reveal-secret-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              setRevealed(!revealed);
+            }}
+            title={revealed ? 'Hide secret' : 'Reveal secret'}
+          >
+            {revealed ? 'Hide 🙈' : 'Show 👁'}
+          </button>
+        )}
         {item.confidence === 'low' && <span className="needs-review">REVIEW</span>}
         {item.recurrence && <span className="recurrence-pill" title={`Repeats ${item.recurrence}`}>↻ {item.recurrence}</span>}
       </div>
-      {item.body && <p>{item.body}</p>}
+      {item.body && <p>{maskSecret(item.body)}</p>}
       <div className="item-meta">
         <span className={`kind-tag kind-${item.kind}`}>{displayKind(item.kind)}</span>
         {item.category && <span>{item.category}</span>}
